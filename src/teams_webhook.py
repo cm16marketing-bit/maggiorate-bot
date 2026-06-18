@@ -57,4 +57,4 @@ async def send_reminder_to_teams(request_id: str, tipster: str, fields: dict, re
         "tipster": tipster,
         "evento": fields.get("evento", "N/D"),
         "mercato": fields.get("mercato", "N/D"),
-        "quota_partenza": "IN ATTESA DI
+        "quota_partenza": "IN ATTESA"
