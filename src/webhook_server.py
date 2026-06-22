@@ -3,7 +3,7 @@ import logging
 import json
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
-from telegram import Bot
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from dotenv import load_dotenv
 from session_manager import SessionManager
 from sheets_logger import log_response
@@ -109,9 +109,8 @@ async def notify_tipster(request_id, esito, commento="", quota_nuova=""):
     fields = session["fields"]
     evento = fields.get("evento", "")
     mercato = fields.get("mercato", "")
-    nome_tipster = fields.get("nome_tipster", "")
+    nome_tipster = session.get("tipster_name", "")
 
-    # Header: include nome tipster se presente
     if nome_tipster:
         header = "Richiesta #" + request_id + " — " + nome_tipster + " · " + evento + " · " + mercato + "\n\n"
     else:
@@ -123,19 +122,33 @@ async def notify_tipster(request_id, esito, commento="", quota_nuova=""):
         msg = header + "ESITO: APPROVATA ✅"
         if commento:
             msg += "\nNota del trader: " + commento
+        reply_markup = None
+
     elif esito == "rifiutata":
         msg = header + "ESITO: RIFIUTATA ❌"
         if commento:
             msg += "\nNota del trader: " + commento
-    else:
+        reply_markup = None
+
+    else:  # controproposta
         msg = header + "CONTROPROPOSTA 🔄\n"
         if quota_nuova:
             msg += "Quota approvata: " + quota_nuova + "\n"
         if commento:
             msg += "Nota del trader: " + commento
+        msg += "\n\nVuoi accettare o rifiutare la controproposta?"
+        # Bottoni inline per il tipster
+        reply_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Accetta", callback_data="cp_accetta:" + request_id),
+            InlineKeyboardButton("❌ Rifiuta", callback_data="cp_rifiuta:" + request_id),
+        ]])
 
     try:
-        await bot.send_message(chat_id=tipster_id, text=msg)
+        await bot.send_message(
+            chat_id=tipster_id,
+            text=msg,
+            reply_markup=reply_markup if esito == "controproposta" else None
+        )
         logger.info("Notifica inviata a " + str(tipster_id))
         try:
             log_response(request_id, esito, {"note": commento})
@@ -156,19 +169,19 @@ async def health():
 @app.get("/approve")
 async def approve(id: str):
     session = session_mgr.get_request(id)
-    nome_tipster = session["fields"].get("nome_tipster", "") if session else ""
+    nome_tipster = session.get("tipster_name", "") if session else ""
     return confirm_page(id, "approvata", "Approvazione", "#22c55e", "✅", nome_tipster)
 
 @app.get("/reject")
 async def reject(id: str):
     session = session_mgr.get_request(id)
-    nome_tipster = session["fields"].get("nome_tipster", "") if session else ""
+    nome_tipster = session.get("tipster_name", "") if session else ""
     return confirm_page(id, "rifiutata", "Rifiuto", "#ef4444", "❌", nome_tipster)
 
 @app.get("/counter")
 async def counter(id: str):
     session = session_mgr.get_request(id)
-    nome_tipster = session["fields"].get("nome_tipster", "") if session else ""
+    nome_tipster = session.get("tipster_name", "") if session else ""
     return confirm_page(id, "controproposta", "Controproposta", "#f59e0b", "🔄", nome_tipster)
 
 
