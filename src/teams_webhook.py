@@ -98,24 +98,11 @@ def build_adaptive_card(request_id, tipster, fields):
     }
 
 
-async def send_to_teams(request_id, tipster, fields):
+async def _post_to_power_automate(payload: dict) -> bool:
+    """Helper interno: invia payload a Power Automate e restituisce True se ok."""
     if not POWER_AUTOMATE_URL:
         logger.error("POWER_AUTOMATE_URL non configurato")
         return False
-
-    payload = {
-        "request_id": request_id,
-        "tipster": tipster,
-        "evento": fields.get("evento", "N/D"),
-        "mercato": fields.get("mercato", "N/D"),
-        "quota_partenza": fields.get("quota_partenza", "N/D"),
-        "maggiorazione": fields.get("maggiorazione", "N/D"),
-        "max_stake": fields.get("max_stake", "N/D"),
-        "budget": fields.get("budget", "N/D"),
-        "go_live": fields.get("go_live", "N/D"),
-        "ora_richiesta": datetime.now().strftime("%H:%M")
-    }
-
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -136,9 +123,23 @@ async def send_to_teams(request_id, tipster, fields):
         return False
 
 
+async def send_to_teams(request_id, tipster, fields):
+    payload = {
+        "request_id": request_id,
+        "tipster": tipster,
+        "evento": fields.get("evento", "N/D"),
+        "mercato": fields.get("mercato", "N/D"),
+        "quota_partenza": fields.get("quota_partenza", "N/D"),
+        "maggiorazione": fields.get("maggiorazione", "N/D"),
+        "max_stake": fields.get("max_stake", "N/D"),
+        "budget": fields.get("budget", "N/D"),
+        "go_live": fields.get("go_live", "N/D"),
+        "ora_richiesta": datetime.now().strftime("%H:%M")
+    }
+    return await _post_to_power_automate(payload)
+
+
 async def send_reminder_to_teams(request_id, tipster, fields, reminder_count):
-    if not POWER_AUTOMATE_URL:
-        return
     payload = {
         "request_id": "REMINDER " + str(reminder_count) + " - " + request_id,
         "tipster": tipster,
@@ -151,13 +152,44 @@ async def send_reminder_to_teams(request_id, tipster, fields, reminder_count):
         "go_live": fields.get("go_live", "N/D"),
         "ora_richiesta": datetime.now().strftime("%H:%M")
     }
-    try:
-        async with aiohttp.ClientSession() as session:
-            await session.post(
-                POWER_AUTOMATE_URL,
-                json=payload,
-                headers={"Content-Type": "application/json"},
-                timeout=aiohttp.ClientTimeout(total=30)
-            )
-    except Exception as e:
-        logger.error("Reminder error: " + str(e))
+    await _post_to_power_automate(payload)
+
+
+async def send_cp_accepted_to_teams(sub_request_id, orig_request_id, tipster, fields):
+    """
+    Il tipster ha accettato la controproposta.
+    Invia su Teams una nuova card con sub_request_id: il trader deve cliccare APPROVATA per confermare.
+    """
+    payload = {
+        "request_id": sub_request_id,
+        "tipster": tipster,
+        "evento": f"[✅ CP ACCETTATA #{orig_request_id}] {fields.get('evento', 'N/D')}",
+        "mercato": fields.get("mercato", "N/D"),
+        "quota_partenza": fields.get("quota_partenza", "N/D"),
+        "maggiorazione": fields.get("maggiorazione", "N/D"),
+        "max_stake": fields.get("max_stake", "N/D"),
+        "budget": fields.get("budget", "N/D"),
+        "go_live": fields.get("go_live", "N/D"),
+        "ora_richiesta": datetime.now().strftime("%H:%M")
+    }
+    return await _post_to_power_automate(payload)
+
+
+async def send_cp_rejected_to_teams(orig_request_id, tipster, fields):
+    """
+    Il tipster ha rifiutato la controproposta.
+    Invia notifica informativa su Teams. Nessuna azione richiesta ai trader.
+    """
+    payload = {
+        "request_id": f"INFO-{orig_request_id}",
+        "tipster": tipster,
+        "evento": f"[❌ CP RIFIUTATA #{orig_request_id}] {fields.get('evento', 'N/D')}",
+        "mercato": fields.get("mercato", "N/D"),
+        "quota_partenza": "—",
+        "maggiorazione": "—",
+        "max_stake": "—",
+        "budget": "—",
+        "go_live": "—",
+        "ora_richiesta": datetime.now().strftime("%H:%M")
+    }
+    await _post_to_power_automate(payload)
