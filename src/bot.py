@@ -1,7 +1,6 @@
 """
 Marathonbet Italia — Bot Richieste Maggiorate
 """
-
 import logging
 import os
 import asyncio
@@ -12,21 +11,19 @@ from telegram.ext import (
     ContextTypes, filters, ConversationHandler
 )
 from dotenv import load_dotenv
-
 from session_manager import SessionManager
 from teams_webhook import send_to_teams, send_reminder_to_teams
 from sheets_logger import log_request, log_response
 
 load_dotenv()
-
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Conversation states
-(EVENTO, MERCATO, QUOTA_PARTENZA, MAGGIORAZIONE, MAX_STAKE, BUDGET, GO_LIVE) = range(7)
+# Conversation states — NOME_TIPSTER è il primo step
+(NOME_TIPSTER, EVENTO, MERCATO, QUOTA_PARTENZA, MAGGIORAZIONE, MAX_STAKE, BUDGET, GO_LIVE) = range(8)
 
 FIELD_LABELS = [
     "Evento",
@@ -60,8 +57,11 @@ def nd_if_empty(text: str) -> str:
 
 
 def format_recap(fields: dict, request_id: str) -> str:
+    nome = fields.get("nome_tipster", "")
+    nome_line = f"👤  Tipster:           {nome}\n" if nome else ""
     return (
         f"✅ *Richiesta #{request_id} inviata ai trader*\n\n"
+        f"{nome_line}"
         f"🏟  Evento:           {fields.get('evento', 'N/D')}\n"
         f"📊  Mercato:          {fields.get('mercato', 'N/D')}\n"
         f"📈  Quota partenza:   {fields.get('quota_partenza', 'N/D')}\n"
@@ -95,13 +95,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# /richiesta
+# /richiesta — primo step: chiede il nome del tipster
 async def richiesta_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     user = update.effective_user
-    context.user_data["tipster"] = f"@{user.username}" if user.username else user.first_name
     context.user_data["tipster_id"] = user.id
     context.user_data["fields"] = {}
+    await update.message.reply_text(
+        "📝 *Come vuoi essere chiamato?*\n_es. Mario_",
+        parse_mode="Markdown"
+    )
+    return NOME_TIPSTER
+
+
+# Raccoglie il nome inserito manualmente dal tipster
+async def get_nome_tipster(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    nome = update.message.text.strip()
+    context.user_data["nome_tipster"] = nome
+    context.user_data["tipster"] = nome                   # usato in send_to_teams / log
+    context.user_data["fields"]["nome_tipster"] = nome    # letto dal webhook
     await ask_field(update, 0)
     return EVENTO
 
@@ -109,11 +121,9 @@ async def richiesta_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def collect(update: Update, context: ContextTypes.DEFAULT_TYPE, index: int, next_state):
     value = nd_if_empty(update.message.text)
     context.user_data["fields"][FIELD_KEYS[index]] = value
-
     if next_state is None:
         await submit(update, context)
         return ConversationHandler.END
-
     await ask_field(update, index + 1)
     return next_state
 
@@ -217,6 +227,7 @@ def main():
     conv = ConversationHandler(
         entry_points=[CommandHandler("richiesta", richiesta_start)],
         states={
+            NOME_TIPSTER:   [MessageHandler(filters.TEXT & ~filters.COMMAND, get_nome_tipster)],
             EVENTO:         [MessageHandler(filters.TEXT & ~filters.COMMAND, get_evento)],
             MERCATO:        [MessageHandler(filters.TEXT & ~filters.COMMAND, get_mercato)],
             QUOTA_PARTENZA: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_quota_partenza)],
