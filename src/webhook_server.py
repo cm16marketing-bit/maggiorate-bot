@@ -15,12 +15,15 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN", ""))
 session_mgr = SessionManager()
-
 SECRET = os.getenv("WEBHOOK_SECRET", "mb2026")
 
 
-def confirm_page(request_id, esito, title, color, emoji):
-    """Pagina con bottone di conferma esplicita — il trader deve cliccare per confermare."""
+def confirm_page(request_id, esito, title, color, emoji, nome_tipster=""):
+    """Pagina con form di conferma — il trader può aggiungere una nota e poi confermare."""
+    tipster_display = (
+        f'<div class="tipster">Tipster: <strong>{nome_tipster}</strong></div>'
+        if nome_tipster else ""
+    )
     return HTMLResponse(content="""
 <!DOCTYPE html>
 <html>
@@ -34,10 +37,14 @@ def confirm_page(request_id, esito, title, color, emoji):
         .card { background: white; padding: 40px 32px; border-radius: 16px; text-align: center; max-width: 380px; width: 90%; box-shadow: 0 4px 20px rgba(0,0,0,0.12); }
         .icon { font-size: 52px; margin-bottom: 16px; }
         h2 { color: #1a1a1a; font-size: 22px; margin-bottom: 8px; }
-        .id { font-size: 13px; color: #888; margin-bottom: 24px; font-family: monospace; background: #f5f5f5; padding: 6px 12px; border-radius: 6px; display: inline-block; }
-        .btn { display: inline-block; padding: 14px 32px; border-radius: 10px; font-size: 16px; font-weight: bold; color: white; background: """ + color + """; border: none; cursor: pointer; width: 100%; margin-top: 8px; text-decoration: none; }
+        .id { font-size: 13px; color: #888; margin-bottom: 10px; font-family: monospace; background: #f5f5f5; padding: 6px 12px; border-radius: 6px; display: inline-block; }
+        .tipster { font-size: 14px; color: #555; margin-bottom: 20px; }
+        .nota-label { text-align: left; font-size: 13px; color: #555; margin-bottom: 6px; font-weight: bold; }
+        textarea { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; resize: vertical; min-height: 80px; margin-bottom: 16px; font-family: Arial, sans-serif; color: #333; }
+        textarea:focus { outline: none; border-color: """ + color + """; }
+        .btn { display: block; padding: 14px 32px; border-radius: 10px; font-size: 16px; font-weight: bold; color: white; background: """ + color + """; border: none; cursor: pointer; width: 100%; margin-top: 8px; }
         .btn:hover { opacity: 0.9; }
-        .cancel { display: inline-block; margin-top: 12px; font-size: 13px; color: #999; cursor: pointer; text-decoration: underline; }
+        .cancel { display: inline-block; margin-top: 12px; font-size: 13px; color: #999; cursor: pointer; text-decoration: underline; background: none; border: none; }
     </style>
 </head>
 <body>
@@ -45,11 +52,16 @@ def confirm_page(request_id, esito, title, color, emoji):
         <div class="icon">""" + emoji + """</div>
         <h2>Conferma """ + title + """</h2>
         <div class="id">#""" + request_id + """</div>
-        <p style="color:#555;font-size:14px;margin-bottom:24px;">Clicca per confermare e notificare il tipster.</p>
-        <a href="/confirm?id=""" + request_id + """&esito=""" + esito + """&secret=""" + SECRET + """" class="btn">
-            """ + emoji + """ Conferma """ + title + """
-        </a>
-        <div class="cancel" onclick="window.close()">Annulla</div>
+        """ + tipster_display + """
+        <form method="get" action="/confirm">
+            <input type="hidden" name="id" value=\"""" + request_id + """\">
+            <input type="hidden" name="esito" value=\"""" + esito + """\">
+            <input type="hidden" name="secret" value=\"""" + SECRET + """\">
+            <div class="nota-label">Nota del trader (opzionale):</div>
+            <textarea name="commento" placeholder="es. accettiamo massimo 10mila euro a questa quota..."></textarea>
+            <button type="submit" class="btn">""" + emoji + """ Conferma """ + title + """</button>
+        </form>
+        <button class="cancel" onclick="window.close()">Annulla</button>
     </div>
 </body>
 </html>""")
@@ -89,7 +101,6 @@ async def notify_tipster(request_id, esito, commento="", quota_nuova=""):
     if not session:
         logger.warning("Sessione non trovata: " + request_id)
         return False
-
     if session["stato"] != "in_attesa":
         logger.warning("Richiesta " + request_id + " gia processata")
         return False
@@ -98,24 +109,30 @@ async def notify_tipster(request_id, esito, commento="", quota_nuova=""):
     fields = session["fields"]
     evento = fields.get("evento", "")
     mercato = fields.get("mercato", "")
-    header = "Richiesta #" + request_id + " — " + evento + " · " + mercato + "\n\n"
+    nome_tipster = fields.get("nome_tipster", "")
+
+    # Header: include nome tipster se presente
+    if nome_tipster:
+        header = "Richiesta #" + request_id + " — " + nome_tipster + " · " + evento + " · " + mercato + "\n\n"
+    else:
+        header = "Richiesta #" + request_id + " — " + evento + " · " + mercato + "\n\n"
 
     session_mgr.update_stato(request_id, esito)
 
     if esito == "approvata":
         msg = header + "ESITO: APPROVATA ✅"
         if commento:
-            msg += "\nCommento: " + commento
+            msg += "\nNota del trader: " + commento
     elif esito == "rifiutata":
         msg = header + "ESITO: RIFIUTATA ❌"
         if commento:
-            msg += "\nCommento: " + commento
+            msg += "\nNota del trader: " + commento
     else:
         msg = header + "CONTROPROPOSTA 🔄\n"
         if quota_nuova:
             msg += "Quota approvata: " + quota_nuova + "\n"
         if commento:
-            msg += "Note: " + commento
+            msg += "Nota del trader: " + commento
 
     try:
         await bot.send_message(chat_id=tipster_id, text=msg)
@@ -135,20 +152,24 @@ async def health():
     return {"status": "ok"}
 
 
-# Step 1 — Mostra pagina di conferma con bottone
+# Step 1 — Mostra pagina di conferma con form + textarea nota
 @app.get("/approve")
 async def approve(id: str):
-    return confirm_page(id, "approvata", "Approvazione", "#22c55e", "✅")
-
+    session = session_mgr.get_request(id)
+    nome_tipster = session["fields"].get("nome_tipster", "") if session else ""
+    return confirm_page(id, "approvata", "Approvazione", "#22c55e", "✅", nome_tipster)
 
 @app.get("/reject")
 async def reject(id: str):
-    return confirm_page(id, "rifiutata", "Rifiuto", "#ef4444", "❌")
-
+    session = session_mgr.get_request(id)
+    nome_tipster = session["fields"].get("nome_tipster", "") if session else ""
+    return confirm_page(id, "rifiutata", "Rifiuto", "#ef4444", "❌", nome_tipster)
 
 @app.get("/counter")
 async def counter(id: str):
-    return confirm_page(id, "controproposta", "Controproposta", "#f59e0b", "🔄")
+    session = session_mgr.get_request(id)
+    nome_tipster = session["fields"].get("nome_tipster", "") if session else ""
+    return confirm_page(id, "controproposta", "Controproposta", "#f59e0b", "🔄", nome_tipster)
 
 
 # Step 2 — Processa dopo conferma esplicita
@@ -156,7 +177,6 @@ async def counter(id: str):
 async def confirm(id: str, esito: str, secret: str, commento: str = "", quota_nuova: str = ""):
     if secret != SECRET:
         return result_page("Accesso negato", "Token non valido.", success=False)
-
     ok = await notify_tipster(id, esito, commento, quota_nuova)
     if ok:
         labels = {"approvata": "Approvata", "rifiutata": "Rifiutata", "controproposta": "Controproposta"}
