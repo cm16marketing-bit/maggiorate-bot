@@ -102,7 +102,7 @@ async def richiesta_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["tipster_id"] = user.id
     context.user_data["fields"] = {}
     await update.message.reply_text(
-        "📝 *Come vuoi essere chiamato?*\n_es. Mario_",
+        "📝 *Nome Tipster:*\n_es. Mario_",
         parse_mode="Markdown"
     )
     return NOME_TIPSTER
