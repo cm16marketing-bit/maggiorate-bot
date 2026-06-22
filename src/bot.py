@@ -5,14 +5,14 @@ import logging
 import os
 import asyncio
 from datetime import datetime
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
-    ContextTypes, filters, ConversationHandler
+    ContextTypes, filters, ConversationHandler, CallbackQueryHandler
 )
 from dotenv import load_dotenv
 from session_manager import SessionManager
-from teams_webhook import send_to_teams, send_reminder_to_teams
+from teams_webhook import send_to_teams, send_reminder_to_teams, send_cp_accepted_to_teams, send_cp_rejected_to_teams
 from sheets_logger import log_request, log_response
 
 load_dotenv()
@@ -112,8 +112,8 @@ async def richiesta_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_nome_tipster(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nome = update.message.text.strip()
     context.user_data["nome_tipster"] = nome
-    context.user_data["tipster"] = nome                   # usato in send_to_teams / log
-    context.user_data["fields"]["nome_tipster"] = nome    # letto dal webhook
+    context.user_data["tipster"] = nome
+    context.user_data["fields"]["nome_tipster"] = nome
     await ask_field(update, 0)
     return EVENTO
 
@@ -145,7 +145,6 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     request_id = session_manager.new_request(tipster_id, fields, tipster)
     await update.message.reply_text(format_recap(fields, request_id), parse_mode="Markdown")
 
-    # Invia a Teams via Power Automate
     ok = await send_to_teams(request_id, tipster, fields)
     if not ok:
         await update.message.reply_text(
@@ -153,13 +152,11 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Log Sheet
     try:
         log_request(request_id, tipster, fields)
     except Exception as e:
         logger.warning(f"Sheet log error: {e}")
 
-    # Avvia reminder ogni 5 min
     task = asyncio.create_task(
         reminder_loop(request_id, tipster_id, tipster, fields, context)
     )
@@ -197,6 +194,47 @@ def cancel_reminder(request_id: str):
     task = _reminders.pop(request_id, None)
     if task and not task.done():
         task.cancel()
+
+
+# Gestione risposta tipster alla controproposta (bottoni inline)
+async def handle_cp_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data  # "cp_accetta:XXXX" o "cp_rifiuta:XXXX"
+    action, orig_request_id = data.split(":", 1)
+
+    session = session_manager.get_request(orig_request_id)
+    if not session:
+        await query.edit_message_text("⚠️ Sessione non trovata o scaduta.")
+        return
+
+    tipster_id = session["tipster_id"]
+    fields = session["fields"]
+    tipster = session.get("tipster_name", "Tipster")
+    original_text = query.message.text
+
+    if action == "cp_accetta":
+        # Crea sub-request: il trader dovrà confermare su Teams
+        sub_id = session_manager.new_request(tipster_id, fields, tipster)
+        ok = await send_cp_accepted_to_teams(sub_id, orig_request_id, tipster, fields)
+        if ok:
+            await query.edit_message_text(
+                original_text + "\n\n✅ *Hai accettato la controproposta.*\n_In attesa di conferma finale dai trader._",
+                parse_mode="Markdown"
+            )
+            logger.info(f"CP accettata da {tipster} — sub_request: {sub_id}")
+        else:
+            await query.edit_message_text("⚠️ Errore nell'invio ai trader. Riprova.")
+
+    elif action == "cp_rifiuta":
+        # Notifica Teams, nessuna sessione creata
+        await send_cp_rejected_to_teams(orig_request_id, tipster, fields)
+        await query.edit_message_text(
+            original_text + "\n\n❌ *Hai rifiutato la controproposta.*\n_I trader sono stati notificati._",
+            parse_mode="Markdown"
+        )
+        logger.info(f"CP rifiutata da {tipster} — request: {orig_request_id}")
 
 
 # /annulla
@@ -245,6 +283,8 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv)
+    # Handler per i bottoni inline della controproposta
+    app.add_handler(CallbackQueryHandler(handle_cp_response, pattern="^cp_(accetta|rifiuta):"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fuori_protocollo))
 
     logger.info("Bot avviato")
