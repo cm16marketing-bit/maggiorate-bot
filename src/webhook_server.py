@@ -56,7 +56,7 @@ async def notify_tipster(request_id, esito, commento="", quota_nuova="", stake_n
     if not session:
         logger.warning("Sessione non trovata: " + request_id)
         return False
-    if session["stato"] != "in_attesa":
+    if session["stato"] not in ("in_attesa", "cp_accepted"):
         logger.warning("Gia processata: " + request_id)
         return False
 
@@ -151,43 +151,35 @@ async def notify_trader_teams(request_id, esito_tipster):
         evento = session["fields"].get("evento", "")
         mercato = session["fields"].get("mercato", "")
 
+    confirm_url = BACKEND_URL + "/quota-online?id=" + request_id + "&secret=" + SECRET
+
     if esito_tipster == "accepted":
-        msg = (
+        testo = (
             "✅ Il tipster ha ACCETTATO la controproposta\n"
             "Richiesta #" + request_id + " — " + evento + " · " + mercato + "\n\n"
-            "Conferma quando la quota è online:"
+            "Clicca qui per confermare che la quota è online:\n"
+            + confirm_url
         )
-        confirm_url = BACKEND_URL + "/quota-online?id=" + request_id + "&secret=" + SECRET
-        # Manda messaggio su Teams con link di conferma
-        payload = {
-            "request_id": request_id,
-            "tipster": "Sistema",
-            "nome_tipster": "RISPOSTA TIPSTER",
-            "evento": "✅ CP ACCETTATA #" + request_id,
-            "mercato": mercato,
-            "quota_partenza": msg,
-            "maggiorazione": confirm_url,
-            "max_stake": "",
-            "budget": "",
-            "go_live": "",
-            "attivita": "",
-            "ora_richiesta": ""
-        }
     else:
-        payload = {
-            "request_id": request_id,
-            "tipster": "Sistema",
-            "nome_tipster": "RISPOSTA TIPSTER",
-            "evento": "❌ CP RIFIUTATA #" + request_id,
-            "mercato": mercato,
-            "quota_partenza": "Il tipster ha rifiutato la controproposta.",
-            "maggiorazione": "",
-            "max_stake": "",
-            "budget": "",
-            "go_live": "",
-            "attivita": "",
-            "ora_richiesta": ""
-        }
+        testo = (
+            "❌ Il tipster ha RIFIUTATO la controproposta\n"
+            "Richiesta #" + request_id + " — " + evento + " · " + mercato
+        )
+
+    payload = {
+        "request_id": "NOTIFICA",
+        "tipster": testo,
+        "nome_tipster": "",
+        "evento": "",
+        "mercato": "",
+        "quota_partenza": "",
+        "maggiorazione": "",
+        "max_stake": "",
+        "budget": "",
+        "go_live": "",
+        "attivita": "",
+        "ora_richiesta": ""
+    }
 
     try:
         async with aiohttp.ClientSession() as s:
