@@ -281,6 +281,9 @@ async def quota_online(id: str, secret: str):
     if not session:
         return result_page("Errore", "Richiesta non trovata.", success=False)
 
+    if session["stato"] == "quota_online":
+        return result_page("Gia confermata", "Quota gia segnata come online.", success=True)
+
     tipster_id = session["tipster_id"]
     fields = session["fields"]
     evento = fields.get("evento", "")
