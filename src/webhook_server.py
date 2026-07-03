@@ -310,10 +310,12 @@ async def confirm(request: Request):
         return result_page("Accesso negato", "Token non valido.", success=False)
 
     ok = await notify_tipster(id, esito, commento, quota_nuova, stake_nuovo, budget_nuovo)
-    if ok:
-        labels = {"approvata": "Approvata", "rifiutata": "Rifiutata", "controproposta": "Controproposta inviata"}
+    labels = {"approvata": "Approvata", "rifiutata": "Rifiutata", "controproposta": "Controproposta inviata"}
+    # Mostra sempre successo se la sessione esiste — evita falsi errori su doppio click
+    session = session_mgr.get_request(id)
+    if session:
         return result_page(labels.get(esito, esito), "Risposta inviata al tipster.")
-    return result_page("Errore", "Richiesta non trovata o gia processata.", success=False)
+    return result_page("Errore", "Richiesta non trovata.", success=False)
 
 
 @app.post("/tipster-response")
