@@ -126,7 +126,8 @@ async def _post_to_power_automate(payload: dict) -> bool:
 async def send_to_teams(request_id, tipster, fields):
     payload = {
         "request_id": request_id,
-        "tipster": tipster,
+        "nome_tipster": fields.get("nome_tipster", "N/D"),
+        "tipster_tg": tipster,
         "evento": fields.get("evento", "N/D"),
         "mercato": fields.get("mercato", "N/D"),
         "quota_partenza": fields.get("quota_partenza", "N/D"),
@@ -142,7 +143,8 @@ async def send_to_teams(request_id, tipster, fields):
 async def send_reminder_to_teams(request_id, tipster, fields, reminder_count):
     payload = {
         "request_id": "REMINDER " + str(reminder_count) + " - " + request_id,
-        "tipster": tipster,
+        "nome_tipster": fields.get("nome_tipster", "N/D"),
+        "tipster_tg": tipster,
         "evento": fields.get("evento", "N/D"),
         "mercato": fields.get("mercato", "N/D"),
         "quota_partenza": "IN ATTESA",
@@ -162,7 +164,8 @@ async def send_cp_accepted_to_teams(sub_request_id, orig_request_id, tipster, fi
     """
     payload = {
         "request_id": sub_request_id,
-        "tipster": tipster,
+        "nome_tipster": fields.get("nome_tipster", "N/D"),
+        "tipster_tg": tipster,
         "evento": f"[✅ CP ACCETTATA #{orig_request_id}] {fields.get('evento', 'N/D')}",
         "mercato": fields.get("mercato", "N/D"),
         "quota_partenza": fields.get("quota_partenza", "N/D"),
@@ -182,7 +185,8 @@ async def send_cp_rejected_to_teams(orig_request_id, tipster, fields):
     """
     payload = {
         "request_id": f"INFO-{orig_request_id}",
-        "tipster": tipster,
+        "nome_tipster": fields.get("nome_tipster", "N/D"),
+        "tipster_tg": tipster,
         "evento": f"[❌ CP RIFIUTATA #{orig_request_id}] {fields.get('evento', 'N/D')}",
         "mercato": fields.get("mercato", "N/D"),
         "quota_partenza": "—",
