@@ -169,3 +169,36 @@ async def send_cp_rejected_to_teams(orig_request_id, tipster, fields):
         ]
     }
     await _post_card_to_teams(info_payload)
+
+
+async def send_segnalazione_to_teams(request_id, tipster, nome_tipster, match, commento):
+    """
+    Invia card SEGNALAZIONE su Teams con pulsante Rispondi che apre pagina Railway.
+    """
+    rispondi_url = BACKEND_URL + "/rispondi-segnalazione?id=" + request_id
+    card_payload = {
+        "type": "message",
+        "attachments": [{
+            "contentType": "application/vnd.microsoft.card.adaptive",
+            "content": {
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "type": "AdaptiveCard",
+                "version": "1.4",
+                "body": [
+                    {"type": "TextBlock", "text": "SEGNALAZIONE #" + request_id, "weight": "Bolder", "size": "Medium", "color": "Warning"},
+                    {"type": "FactSet", "facts": [
+                        {"title": "Nome tipster", "value": nome_tipster or "N/D"},
+                        {"title": "Tipster TG", "value": tipster},
+                        {"title": "Match", "value": match or "N/D"},
+                        {"title": "Ora", "value": datetime.now().strftime("%H:%M")}
+                    ]},
+                    {"type": "TextBlock", "text": "Commento:", "weight": "Bolder", "spacing": "Medium"},
+                    {"type": "TextBlock", "text": commento or "N/D", "wrap": True}
+                ],
+                "actions": [
+                    {"type": "Action.OpenUrl", "title": "Rispondi", "url": rispondi_url, "style": "positive"}
+                ]
+            }
+        }]
+    }
+    return await _post_card_to_teams(card_payload)
