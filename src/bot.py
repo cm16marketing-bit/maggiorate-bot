@@ -2,15 +2,15 @@ import logging
 import os
 import asyncio
 from datetime import datetime
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
-    ContextTypes, filters, ConversationHandler
+    ContextTypes, filters, ConversationHandler, CallbackQueryHandler
 )
 from dotenv import load_dotenv
 
 from session_manager import SessionManager
-from teams_webhook import send_to_teams, send_reminder_to_teams
+from teams_webhook import send_to_teams, send_reminder_to_teams, send_segnalazione_to_teams
 from sheets_logger import log_request, log_response
 
 load_dotenv()
@@ -21,6 +21,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ─── STATI MAGGIORATA ───
 (NOME_TIPSTER, EVENTO, MERCATO, QUOTA_PARTENZA, MAGGIORAZIONE, MAX_STAKE, BUDGET, GO_LIVE, ATTIVITA) = range(9)
 
 FIELD_LABELS = [
@@ -46,6 +47,9 @@ FIELD_HINTS = [
     "es. 20:45",
     "es. collab, scalata, pubblicita",
 ]
+
+# ─── STATI SEGNALAZIONE ───
+(SEG_NOME, SEG_MATCH, SEG_COMMENTO) = range(100, 103)
 
 session_manager = SessionManager()
 _reminders = {}
@@ -81,27 +85,36 @@ def format_recap(fields, request_id):
     )
 
 
-async def ask_field(update, index):
+async def ask_field(update_or_query, index):
     label = FIELD_LABELS[index]
     hint = FIELD_HINTS[index]
-    await update.message.reply_text(
-        str(index + 1) + "/9 - " + label + "\n" + hint + "\n\n(scrivi skip per N/D)"
-    )
+    text = str(index + 1) + "/9 - " + label + "\n" + hint + "\n\n(scrivi skip per N/D)"
+    if hasattr(update_or_query, "message") and update_or_query.message:
+        await update_or_query.message.reply_text(text)
+    else:
+        # CallbackQuery
+        await update_or_query.callback_query.message.reply_text(text)
 
 
+# ─── /start con menu a 2 pulsanti ──────────────────────────────────────────
 async def start(update, context):
     user = update.effective_user
     if not is_authorized(user.id):
         await update.message.reply_text("Accesso non autorizzato.")
         return
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔼 Quota Maggiorata", callback_data="menu_maggiorata")],
+        [InlineKeyboardButton("⚠️ Segnalazione",    callback_data="menu_segnalazione")],
+    ])
     await update.message.reply_text(
         "Ciao " + user.first_name + "!\n\n"
-        "Sono il sistema richieste maggiorate di Marathonbet Italia.\n\n"
-        "Digita /richiesta per inviare una nuova richiesta.\n"
-        "Digita /annulla per interrompere in qualsiasi momento."
+        "Sono il sistema richieste di Marathonbet Italia.\n\n"
+        "Scegli cosa vuoi fare:",
+        reply_markup=keyboard
     )
 
 
+# ─── FLUSSO MAGGIORATA ─────────────────────────────────────────────────────
 async def richiesta_start(update, context):
     user = update.effective_user
     if not is_authorized(user.id):
@@ -112,6 +125,25 @@ async def richiesta_start(update, context):
     context.user_data["tipster_id"] = user.id
     context.user_data["fields"] = {}
     await ask_field(update, 0)
+    return NOME_TIPSTER
+
+
+async def richiesta_from_menu(update, context):
+    """Entry point per /start -> clic su Quota Maggiorata."""
+    query = update.callback_query
+    await query.answer()
+    user = update.effective_user
+    if not is_authorized(user.id):
+        await query.message.reply_text("Accesso non autorizzato.")
+        return ConversationHandler.END
+    context.user_data.clear()
+    context.user_data["tipster"] = "@" + user.username if user.username else user.first_name
+    context.user_data["tipster_id"] = user.id
+    context.user_data["fields"] = {}
+    # Chiedi primo campo
+    label = FIELD_LABELS[0]
+    hint = FIELD_HINTS[0]
+    await query.message.reply_text("1/9 - " + label + "\n" + hint + "\n\n(scrivi skip per N/D)")
     return NOME_TIPSTER
 
 
@@ -189,10 +221,93 @@ async def reminder_loop(request_id, tipster_id, tipster, fields, context, interv
         pass
 
 
+# ─── FLUSSO SEGNALAZIONE ──────────────────────────────────────────────────
+async def segnalazione_start_cmd(update, context):
+    user = update.effective_user
+    if not is_authorized(user.id):
+        await update.message.reply_text("Accesso non autorizzato.")
+        return ConversationHandler.END
+    context.user_data.clear()
+    context.user_data["tipster"] = "@" + user.username if user.username else user.first_name
+    context.user_data["tipster_id"] = user.id
+    context.user_data["seg"] = {}
+    await update.message.reply_text(
+        "⚠️ Nuova segnalazione\n\n1/3 - Nome Tipster\nes. Marco Rossi"
+    )
+    return SEG_NOME
+
+
+async def segnalazione_from_menu(update, context):
+    query = update.callback_query
+    await query.answer()
+    user = update.effective_user
+    if not is_authorized(user.id):
+        await query.message.reply_text("Accesso non autorizzato.")
+        return ConversationHandler.END
+    context.user_data.clear()
+    context.user_data["tipster"] = "@" + user.username if user.username else user.first_name
+    context.user_data["tipster_id"] = user.id
+    context.user_data["seg"] = {}
+    await query.message.reply_text(
+        "⚠️ Nuova segnalazione\n\n1/3 - Nome Tipster\nes. Marco Rossi"
+    )
+    return SEG_NOME
+
+
+async def seg_get_nome(update, context):
+    context.user_data["seg"]["nome_tipster"] = update.message.text.strip() or "N/D"
+    await update.message.reply_text("2/3 - Match\nes. Milan vs Inter")
+    return SEG_MATCH
+
+
+async def seg_get_match(update, context):
+    context.user_data["seg"]["match"] = update.message.text.strip() or "N/D"
+    await update.message.reply_text("3/3 - Commento (descrivi il problema)\nes. Manca Lautaro Martinez marcatore")
+    return SEG_COMMENTO
+
+
+async def seg_get_commento(update, context):
+    context.user_data["seg"]["commento"] = update.message.text.strip() or "N/D"
+    seg = context.user_data["seg"]
+    tipster = context.user_data["tipster"]
+    tipster_id = context.user_data["tipster_id"]
+
+    # Salva come richiesta di tipo segnalazione (riusa tabella requests)
+    pseudo_fields = {
+        "nome_tipster": seg["nome_tipster"],
+        "evento": seg["match"],
+        "mercato": seg["commento"],
+        "quota_partenza": "",
+        "maggiorazione": "",
+        "max_stake": "",
+        "budget": "",
+        "go_live": "",
+        "attivita": "segnalazione",
+    }
+    request_id = session_manager.new_request(tipster_id, pseudo_fields, tipster)
+    session_manager.update_stato(request_id, "segnalazione_aperta")
+
+    await update.message.reply_text(
+        "⚠️ *Segnalazione #" + request_id + " inviata ai trader*\n\n"
+        "Nome tipster: " + seg["nome_tipster"] + "\n"
+        "Match: " + seg["match"] + "\n"
+        "Commento: " + seg["commento"] + "\n\n"
+        "_Ti rispondo qui quando il trader risponde._",
+        parse_mode="Markdown"
+    )
+
+    ok = await send_segnalazione_to_teams(request_id, tipster, seg["nome_tipster"], seg["match"], seg["commento"])
+    if not ok:
+        await update.message.reply_text("Errore nell'invio ai trader. Contatta il tuo account manager.")
+    return ConversationHandler.END
+
+
+# ─── FALLBACK ───────────────────────────────────────────────────────────────
 async def annulla(update, context):
     context.user_data.clear()
-    await update.message.reply_text(
-        "Richiesta annullata.\n\nDigita /richiesta per iniziarne una nuova."
+    msg = update.message if update.message else update.callback_query.message
+    await msg.reply_text(
+        "Operazione annullata.\n\nDigita /start per ricominciare."
     )
     return ConversationHandler.END
 
@@ -202,59 +317,17 @@ async def fuori_protocollo(update, context):
     if not is_authorized(user.id):
         return
     await update.message.reply_text(
-        "Questo canale e riservato alle richieste di maggiorazione.\n\n"
-        "Digita /richiesta per iniziare.\n"
-        "Per altre richieste contatta il tuo account manager."
+        "Questo canale e riservato alle richieste.\n\n"
+        "Digita /start per iniziare."
     )
 
 
-def main():
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
-        raise ValueError("TELEGRAM_BOT_TOKEN mancante")
-
-    app = Application.builder().token(token).build()
-
-    conv = ConversationHandler(
-        entry_points=[CommandHandler("richiesta", richiesta_start)],
-        states={
-            NOME_TIPSTER:   [MessageHandler(filters.TEXT & ~filters.COMMAND, get_nome_tipster)],
-            EVENTO:         [MessageHandler(filters.TEXT & ~filters.COMMAND, get_evento)],
-            MERCATO:        [MessageHandler(filters.TEXT & ~filters.COMMAND, get_mercato)],
-            QUOTA_PARTENZA: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_quota_partenza)],
-            MAGGIORAZIONE:  [MessageHandler(filters.TEXT & ~filters.COMMAND, get_maggiorazione)],
-            MAX_STAKE:      [MessageHandler(filters.TEXT & ~filters.COMMAND, get_max_stake)],
-            BUDGET:         [MessageHandler(filters.TEXT & ~filters.COMMAND, get_budget)],
-            GO_LIVE:        [MessageHandler(filters.TEXT & ~filters.COMMAND, get_go_live)],
-            ATTIVITA:       [MessageHandler(filters.TEXT & ~filters.COMMAND, get_attivita)],
-        },
-        fallbacks=[
-            CommandHandler("annulla", annulla),
-            MessageHandler(filters.COMMAND, annulla),
-        ],
-        conversation_timeout=600,
-    )
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(conv)
-    from telegram.ext import CallbackQueryHandler
-    app.add_handler(CallbackQueryHandler(handle_callback, pattern="^cp_"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fuori_protocollo))
-
-    logger.info("Bot avviato")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
-
-
-if __name__ == "__main__":
-    main()
-
-
-# ─── CALLBACK HANDLER per bottoni inline controproposta ───────────────────────
-async def handle_callback(update, context):
+# ─── CALLBACK HANDLER per bottoni inline controproposta ───────────────────
+async def handle_cp_callback(update, context):
     query = update.callback_query
     await query.answer()
 
-    data = query.data  # cp_accept_XXXXXXXX o cp_reject_XXXXXXXX
+    data = query.data
 
     if data.startswith("cp_accept_"):
         request_id = data.replace("cp_accept_", "")
@@ -277,10 +350,8 @@ async def handle_callback(update, context):
                 timeout=_aiohttp.ClientTimeout(total=15)
             )
     except Exception as e:
-        import logging as _logging
-        _logging.getLogger(__name__).error("Callback error: " + str(e))
+        logger.error("Callback error: " + str(e))
 
-    # Aggiorna il messaggio Telegram rimuovendo i bottoni
     if esito == "accepted":
         await query.edit_message_text(
             query.message.text + "\n\n✅ Hai accettato la controproposta. Verrai notificato quando la quota è online."
@@ -289,3 +360,66 @@ async def handle_callback(update, context):
         await query.edit_message_text(
             query.message.text + "\n\n❌ Hai rifiutato la controproposta."
         )
+
+
+def main():
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token:
+        raise ValueError("TELEGRAM_BOT_TOKEN mancante")
+
+    app = Application.builder().token(token).build()
+
+    # ConversationHandler Maggiorata (entry: /richiesta OR callback menu_maggiorata)
+    conv_maggiorata = ConversationHandler(
+        entry_points=[
+            CommandHandler("richiesta", richiesta_start),
+            CallbackQueryHandler(richiesta_from_menu, pattern="^menu_maggiorata$"),
+        ],
+        states={
+            NOME_TIPSTER:   [MessageHandler(filters.TEXT & ~filters.COMMAND, get_nome_tipster)],
+            EVENTO:         [MessageHandler(filters.TEXT & ~filters.COMMAND, get_evento)],
+            MERCATO:        [MessageHandler(filters.TEXT & ~filters.COMMAND, get_mercato)],
+            QUOTA_PARTENZA: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_quota_partenza)],
+            MAGGIORAZIONE:  [MessageHandler(filters.TEXT & ~filters.COMMAND, get_maggiorazione)],
+            MAX_STAKE:      [MessageHandler(filters.TEXT & ~filters.COMMAND, get_max_stake)],
+            BUDGET:         [MessageHandler(filters.TEXT & ~filters.COMMAND, get_budget)],
+            GO_LIVE:        [MessageHandler(filters.TEXT & ~filters.COMMAND, get_go_live)],
+            ATTIVITA:       [MessageHandler(filters.TEXT & ~filters.COMMAND, get_attivita)],
+        },
+        fallbacks=[
+            CommandHandler("annulla", annulla),
+            CommandHandler("start", annulla),
+        ],
+        conversation_timeout=600,
+    )
+
+    # ConversationHandler Segnalazione (entry: /segnalazione OR callback menu_segnalazione)
+    conv_segnalazione = ConversationHandler(
+        entry_points=[
+            CommandHandler("segnalazione", segnalazione_start_cmd),
+            CallbackQueryHandler(segnalazione_from_menu, pattern="^menu_segnalazione$"),
+        ],
+        states={
+            SEG_NOME:     [MessageHandler(filters.TEXT & ~filters.COMMAND, seg_get_nome)],
+            SEG_MATCH:    [MessageHandler(filters.TEXT & ~filters.COMMAND, seg_get_match)],
+            SEG_COMMENTO: [MessageHandler(filters.TEXT & ~filters.COMMAND, seg_get_commento)],
+        },
+        fallbacks=[
+            CommandHandler("annulla", annulla),
+            CommandHandler("start", annulla),
+        ],
+        conversation_timeout=600,
+    )
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(conv_maggiorata)
+    app.add_handler(conv_segnalazione)
+    app.add_handler(CallbackQueryHandler(handle_cp_callback, pattern="^cp_"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fuori_protocollo))
+
+    logger.info("Bot avviato")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+
+if __name__ == "__main__":
+    main()
