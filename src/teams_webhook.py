@@ -12,10 +12,13 @@ BACKEND_URL = os.getenv("BACKEND_URL", "https://web-production-162d3.up.railway.
 def build_adaptive_card(request_id, tipster, fields, title_prefix="NUOVA RICHIESTA"):
     """
     Costruisce il payload completo (message + adaptive card) da postare direttamente al webhook Teams.
+    Usa Action.OpenUrl che apre le pagine HTML gia esistenti su Railway (/approve, /reject, /counter).
     Include sia nome_tipster (nome reale) che tipster_tg (handle Telegram).
     """
-    webhook_url = BACKEND_URL + "/trader-response"
     nome_tipster = fields.get("nome_tipster", "N/D")
+    approve_url = BACKEND_URL + "/approve?id=" + request_id
+    reject_url = BACKEND_URL + "/reject?id=" + request_id
+    counter_url = BACKEND_URL + "/counter?id=" + request_id
     return {
         "type": "message",
         "attachments": [
@@ -47,56 +50,25 @@ def build_adaptive_card(request_id, tipster, fields, title_prefix="NUOVA RICHIES
                                 {"title": "Tipster TG", "value": tipster},
                                 {"title": "Ora richiesta", "value": datetime.now().strftime("%H:%M")}
                             ]
-                        },
-                        {
-                            "type": "Input.Text",
-                            "id": "commento",
-                            "label": "Commento (opzionale)",
-                            "placeholder": "es. quota rivista, mercato volatile...",
-                            "isMultiline": False
                         }
                     ],
                     "actions": [
                         {
-                            "type": "Action.Http",
+                            "type": "Action.OpenUrl",
                             "title": "APPROVATA",
-                            "method": "POST",
-                            "url": webhook_url,
-                            "headers": [{"name": "Content-Type", "value": "application/json"}],
-                            "body": '{"request_id":"' + request_id + '","esito":"approvata","commento":"{{commento.value}}","sender":"{{sender}}"}',
+                            "url": approve_url,
                             "style": "positive"
                         },
                         {
-                            "type": "Action.Http",
+                            "type": "Action.OpenUrl",
                             "title": "RIFIUTATA",
-                            "method": "POST",
-                            "url": webhook_url,
-                            "headers": [{"name": "Content-Type", "value": "application/json"}],
-                            "body": '{"request_id":"' + request_id + '","esito":"rifiutata","commento":"{{commento.value}}","sender":"{{sender}}"}',
+                            "url": reject_url,
                             "style": "destructive"
                         },
                         {
-                            "type": "Action.ShowCard",
+                            "type": "Action.OpenUrl",
                             "title": "CONTROPROPOSTA",
-                            "card": {
-                                "type": "AdaptiveCard",
-                                "body": [
-                                    {"type": "Input.Text", "id": "quota_nuova", "label": "Quota approvata", "placeholder": "es. 2.10"},
-                                    {"type": "Input.Text", "id": "stake_nuovo", "label": "Max stake rivisto", "placeholder": "es. 25"},
-                                    {"type": "Input.Text", "id": "budget_nuovo", "label": "Budget rivisto", "placeholder": "es. 300"},
-                                    {"type": "Input.Text", "id": "note", "label": "Note", "isMultiline": True, "placeholder": "dettagli controproposta"}
-                                ],
-                                "actions": [
-                                    {
-                                        "type": "Action.Http",
-                                        "title": "Invia controproposta",
-                                        "method": "POST",
-                                        "url": webhook_url,
-                                        "headers": [{"name": "Content-Type", "value": "application/json"}],
-                                        "body": '{"request_id":"' + request_id + '","esito":"controproposta","quota_nuova":"{{quota_nuova.value}}","stake_nuovo":"{{stake_nuovo.value}}","budget_nuovo":"{{budget_nuovo.value}}","note":"{{note.value}}","sender":"{{sender}}"}'
-                                    }
-                                ]
-                            }
+                            "url": counter_url
                         }
                     ]
                 }
@@ -159,14 +131,6 @@ async def send_cp_rejected_to_teams(orig_request_id, tipster, fields):
     Il tipster ha rifiutato la controproposta.
     Invia notifica informativa su Teams. Nessuna azione richiesta ai trader.
     """
-    info_fields = dict(fields)
-    info_fields["evento"] = f"[CP RIFIUTATA #{orig_request_id}] {fields.get('evento', 'N/D')}"
-    info_fields["quota_partenza"] = "—"
-    info_fields["maggiorazione"] = "—"
-    info_fields["max_stake"] = "—"
-    info_fields["budget"] = "—"
-    info_fields["go_live"] = "—"
-    # Build simplified card without buttons for info-only notification
     info_payload = {
         "type": "message",
         "attachments": [
