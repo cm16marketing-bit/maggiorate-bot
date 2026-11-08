@@ -9,8 +9,13 @@ POWER_AUTOMATE_URL = os.getenv("POWER_AUTOMATE_URL")
 BACKEND_URL = os.getenv("BACKEND_URL", "https://web-production-162d3.up.railway.app")
 
 
-def build_adaptive_card(request_id, tipster, fields):
+def build_adaptive_card(request_id, tipster, fields, title_prefix="NUOVA RICHIESTA"):
+    """
+    Costruisce il payload completo (message + adaptive card) da postare direttamente al webhook Teams.
+    Include sia nome_tipster (nome reale) che tipster_tg (handle Telegram).
+    """
     webhook_url = BACKEND_URL + "/trader-response"
+    nome_tipster = fields.get("nome_tipster", "N/D")
     return {
         "type": "message",
         "attachments": [
@@ -23,13 +28,14 @@ def build_adaptive_card(request_id, tipster, fields):
                     "body": [
                         {
                             "type": "TextBlock",
-                            "text": "NUOVA RICHIESTA #" + request_id,
+                            "text": title_prefix + " #" + request_id,
                             "weight": "Bolder",
                             "size": "Medium"
                         },
                         {
                             "type": "FactSet",
                             "facts": [
+                                {"title": "Nome tipster", "value": nome_tipster},
                                 {"title": "Evento", "value": fields.get("evento", "N/D")},
                                 {"title": "Mercato", "value": fields.get("mercato", "N/D")},
                                 {"title": "Quota partenza", "value": fields.get("quota_partenza", "N/D")},
@@ -37,7 +43,8 @@ def build_adaptive_card(request_id, tipster, fields):
                                 {"title": "Max stake", "value": fields.get("max_stake", "N/D")},
                                 {"title": "Budget totale", "value": fields.get("budget", "N/D")},
                                 {"title": "Go-live", "value": fields.get("go_live", "N/D")},
-                                {"title": "Tipster", "value": tipster},
+                                {"title": "Attività", "value": fields.get("attivita", "N/D")},
+                                {"title": "Tipster TG", "value": tipster},
                                 {"title": "Ora richiesta", "value": datetime.now().strftime("%H:%M")}
                             ]
                         },
@@ -98,8 +105,8 @@ def build_adaptive_card(request_id, tipster, fields):
     }
 
 
-async def _post_to_power_automate(payload: dict) -> bool:
-    """Helper interno: invia payload a Power Automate e restituisce True se ok."""
+async def _post_card_to_teams(card_payload: dict) -> bool:
+    """Helper interno: invia la card adattiva al webhook Teams e restituisce True se ok."""
     if not POWER_AUTOMATE_URL:
         logger.error("POWER_AUTOMATE_URL non configurato")
         return False
@@ -107,16 +114,16 @@ async def _post_to_power_automate(payload: dict) -> bool:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 POWER_AUTOMATE_URL,
-                json=payload,
+                json=card_payload,
                 headers={"Content-Type": "application/json"},
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as resp:
                 body = await resp.text()
-                logger.info("Power Automate status: " + str(resp.status))
+                logger.info("Teams webhook status: " + str(resp.status))
                 if resp.status in (200, 202):
                     return True
                 else:
-                    logger.error("Power Automate error: " + body)
+                    logger.error("Teams webhook error: " + body)
                     return False
     except Exception as e:
         logger.error("Exception: " + str(e))
@@ -124,37 +131,16 @@ async def _post_to_power_automate(payload: dict) -> bool:
 
 
 async def send_to_teams(request_id, tipster, fields):
-    payload = {
-        "request_id": request_id,
-        "nome_tipster": fields.get("nome_tipster", "N/D"),
-        "tipster_tg": tipster,
-        "evento": fields.get("evento", "N/D"),
-        "mercato": fields.get("mercato", "N/D"),
-        "quota_partenza": fields.get("quota_partenza", "N/D"),
-        "maggiorazione": fields.get("maggiorazione", "N/D"),
-        "max_stake": fields.get("max_stake", "N/D"),
-        "budget": fields.get("budget", "N/D"),
-        "go_live": fields.get("go_live", "N/D"),
-        "ora_richiesta": datetime.now().strftime("%H:%M")
-    }
-    return await _post_to_power_automate(payload)
+    card = build_adaptive_card(request_id, tipster, fields, title_prefix="NUOVA RICHIESTA")
+    return await _post_card_to_teams(card)
 
 
 async def send_reminder_to_teams(request_id, tipster, fields, reminder_count):
-    payload = {
-        "request_id": "REMINDER " + str(reminder_count) + " - " + request_id,
-        "nome_tipster": fields.get("nome_tipster", "N/D"),
-        "tipster_tg": tipster,
-        "evento": fields.get("evento", "N/D"),
-        "mercato": fields.get("mercato", "N/D"),
-        "quota_partenza": "IN ATTESA",
-        "maggiorazione": fields.get("maggiorazione", "N/D"),
-        "max_stake": fields.get("max_stake", "N/D"),
-        "budget": fields.get("budget", "N/D"),
-        "go_live": fields.get("go_live", "N/D"),
-        "ora_richiesta": datetime.now().strftime("%H:%M")
-    }
-    await _post_to_power_automate(payload)
+    reminder_fields = dict(fields)
+    reminder_fields["quota_partenza"] = "IN ATTESA"
+    reminder_id = "REMINDER " + str(reminder_count) + " - " + request_id
+    card = build_adaptive_card(reminder_id, tipster, reminder_fields, title_prefix="REMINDER")
+    await _post_card_to_teams(card)
 
 
 async def send_cp_accepted_to_teams(sub_request_id, orig_request_id, tipster, fields):
@@ -162,20 +148,10 @@ async def send_cp_accepted_to_teams(sub_request_id, orig_request_id, tipster, fi
     Il tipster ha accettato la controproposta.
     Invia su Teams una nuova card con sub_request_id: il trader deve cliccare APPROVATA per confermare.
     """
-    payload = {
-        "request_id": sub_request_id,
-        "nome_tipster": fields.get("nome_tipster", "N/D"),
-        "tipster_tg": tipster,
-        "evento": f"[✅ CP ACCETTATA #{orig_request_id}] {fields.get('evento', 'N/D')}",
-        "mercato": fields.get("mercato", "N/D"),
-        "quota_partenza": fields.get("quota_partenza", "N/D"),
-        "maggiorazione": fields.get("maggiorazione", "N/D"),
-        "max_stake": fields.get("max_stake", "N/D"),
-        "budget": fields.get("budget", "N/D"),
-        "go_live": fields.get("go_live", "N/D"),
-        "ora_richiesta": datetime.now().strftime("%H:%M")
-    }
-    return await _post_to_power_automate(payload)
+    cp_fields = dict(fields)
+    cp_fields["evento"] = f"[CP ACCETTATA #{orig_request_id}] {fields.get('evento', 'N/D')}"
+    card = build_adaptive_card(sub_request_id, tipster, cp_fields, title_prefix="CP ACCETTATA")
+    return await _post_card_to_teams(card)
 
 
 async def send_cp_rejected_to_teams(orig_request_id, tipster, fields):
@@ -183,17 +159,49 @@ async def send_cp_rejected_to_teams(orig_request_id, tipster, fields):
     Il tipster ha rifiutato la controproposta.
     Invia notifica informativa su Teams. Nessuna azione richiesta ai trader.
     """
-    payload = {
-        "request_id": f"INFO-{orig_request_id}",
-        "nome_tipster": fields.get("nome_tipster", "N/D"),
-        "tipster_tg": tipster,
-        "evento": f"[❌ CP RIFIUTATA #{orig_request_id}] {fields.get('evento', 'N/D')}",
-        "mercato": fields.get("mercato", "N/D"),
-        "quota_partenza": "—",
-        "maggiorazione": "—",
-        "max_stake": "—",
-        "budget": "—",
-        "go_live": "—",
-        "ora_richiesta": datetime.now().strftime("%H:%M")
+    info_fields = dict(fields)
+    info_fields["evento"] = f"[CP RIFIUTATA #{orig_request_id}] {fields.get('evento', 'N/D')}"
+    info_fields["quota_partenza"] = "—"
+    info_fields["maggiorazione"] = "—"
+    info_fields["max_stake"] = "—"
+    info_fields["budget"] = "—"
+    info_fields["go_live"] = "—"
+    # Build simplified card without buttons for info-only notification
+    info_payload = {
+        "type": "message",
+        "attachments": [
+            {
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": {
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "type": "AdaptiveCard",
+                    "version": "1.4",
+                    "body": [
+                        {
+                            "type": "TextBlock",
+                            "text": f"CP RIFIUTATA #{orig_request_id}",
+                            "weight": "Bolder",
+                            "size": "Medium",
+                            "color": "Attention"
+                        },
+                        {
+                            "type": "FactSet",
+                            "facts": [
+                                {"title": "Nome tipster", "value": fields.get("nome_tipster", "N/D")},
+                                {"title": "Evento", "value": fields.get("evento", "N/D")},
+                                {"title": "Tipster TG", "value": tipster},
+                                {"title": "Ora", "value": datetime.now().strftime("%H:%M")}
+                            ]
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "Nessuna azione richiesta: il tipster ha rifiutato la controproposta.",
+                            "wrap": True,
+                            "isSubtle": True
+                        }
+                    ]
+                }
+            }
+        ]
     }
-    await _post_to_power_automate(payload)
+    await _post_card_to_teams(info_payload)
