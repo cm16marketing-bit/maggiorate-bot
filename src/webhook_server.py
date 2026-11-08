@@ -396,6 +396,86 @@ async def trader_response(request: Request):
     return {"ok": ok}
 
 
+
+
+# --- ENDPOINT SEGNALAZIONE ---
+@app.get("/rispondi-segnalazione")
+async def rispondi_segnalazione(id: str):
+    session = session_mgr.get_request(id)
+    if not session:
+        return result_page("Errore", "Segnalazione non trovata.", success=False)
+    if session["stato"] != "segnalazione_aperta":
+        return result_page("Gia risposto", "A questa segnalazione e gia stata data una risposta.", success=True)
+
+    match = session["fields"].get("evento", "N/D")
+    commento = session["fields"].get("mercato", "N/D")
+    nome = session["fields"].get("nome_tipster", "N/D")
+
+    return HTMLResponse(content="""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rispondi a Segnalazione</title>""" + STYLE + """</head>
+<body><div class="card">
+<div class="icon">💬</div>
+<h2>Rispondi alla Segnalazione</h2>
+<span class="rid">#""" + id + """</span>
+<div style="background:#fff8e1;border-left:4px solid #f59e0b;padding:12px;border-radius:8px;margin-bottom:16px;font-size:13px;color:#333;">
+<b>Nome tipster:</b> """ + nome + """<br>
+<b>Match:</b> """ + match + """<br>
+<b>Commento:</b> """ + commento + """
+</div>
+<form method="POST" action="/confirm-segnalazione">
+<input type="hidden" name="id" value=\"""" + id + """\">
+<input type="hidden" name="secret" value=\"""" + SECRET + """\">
+<label>Risposta per il tipster</label>
+<textarea name="risposta" placeholder="Es. Abbiamo aggiunto il mercato. Fammi sapere se va bene." required></textarea>
+<button type="submit" class="btn" style="background:#22c55e;">Invia Risposta</button>
+</form>
+<span class="cancel" onclick="window.close()">Annulla</span>
+</div></body></html>""")
+
+
+@app.post("/confirm-segnalazione")
+async def confirm_segnalazione(request: Request):
+    form = await request.form()
+    id = form.get("id", "")
+    secret = form.get("secret", "")
+    risposta = form.get("risposta", "").strip()
+
+    if secret != SECRET:
+        return result_page("Accesso negato", "Token non valido.", success=False)
+    if not risposta:
+        return result_page("Errore", "Risposta vuota.", success=False)
+
+    session = session_mgr.get_request(id)
+    if not session:
+        return result_page("Errore", "Segnalazione non trovata.", success=False)
+    if session["stato"] != "segnalazione_aperta":
+        return result_page("Gia risposto", "A questa segnalazione e gia stata data una risposta.", success=True)
+
+    tipster_id = session["tipster_id"]
+    match = session["fields"].get("evento", "")
+    commento_originale = session["fields"].get("mercato", "")
+
+    session_mgr.update_stato(id, "segnalazione_risposta")
+    session_mgr.save_cp_details(id, {"risposta": risposta})
+
+    try:
+        await bot.send_message(
+            chat_id=tipster_id,
+            text=(
+                "Risposta a Segnalazione #" + id + "\n"
+                + "Match: " + match + "\n"
+                + "Tua segnalazione: " + commento_originale + "\n\n"
+                + "Risposta del trader:\n" + risposta
+            )
+        )
+    except Exception as e:
+        logger.error("Telegram error: " + str(e))
+        return result_page("Errore", "Impossibile notificare il tipster.", success=False)
+
+    return result_page("Risposta inviata", "Il tipster e stato notificato.")
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
