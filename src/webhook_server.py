@@ -151,39 +151,54 @@ async def notify_trader_teams(request_id, esito_tipster):
         evento = session["fields"].get("evento", "")
         mercato = session["fields"].get("mercato", "")
 
-    confirm_url = BACKEND_URL + "/quota-online?id=" + request_id + "&secret=" + SECRET
-
     if esito_tipster == "accepted":
-        testo = (
-            "✅ Il tipster ha ACCETTATO la controproposta\n"
-            "Richiesta #" + request_id + " — " + evento + " · " + mercato + "\n\n"
-            "Clicca qui per confermare che la quota è online:\n"
-            + confirm_url
-        )
+        confirm_url = BACKEND_URL + "/quota-online?id=" + request_id + "&secret=" + SECRET
+        card_payload = {
+            "type": "message",
+            "attachments": [{
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": {
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "type": "AdaptiveCard",
+                    "version": "1.4",
+                    "body": [
+                        {"type": "TextBlock", "text": "CP ACCETTATA #" + request_id, "weight": "Bolder", "size": "Medium", "color": "Good"},
+                        {"type": "FactSet", "facts": [
+                            {"title": "Evento", "value": evento or "N/D"},
+                            {"title": "Mercato", "value": mercato or "N/D"}
+                        ]},
+                        {"type": "TextBlock", "text": "Il tipster ha ACCETTATO la controproposta. Conferma che la quota e online:", "wrap": True}
+                    ],
+                    "actions": [
+                        {"type": "Action.OpenUrl", "title": "Conferma quota online", "url": confirm_url, "style": "positive"}
+                    ]
+                }
+            }]
+        }
     else:
-        testo = (
-            "❌ Il tipster ha RIFIUTATO la controproposta\n"
-            "Richiesta #" + request_id + " — " + evento + " · " + mercato
-        )
-
-    payload = {
-        "request_id": "NOTIFICA",
-        "tipster": testo,
-        "nome_tipster": "",
-        "evento": "",
-        "mercato": "",
-        "quota_partenza": "",
-        "maggiorazione": "",
-        "max_stake": "",
-        "budget": "",
-        "go_live": "",
-        "attivita": "",
-        "ora_richiesta": ""
-    }
+        card_payload = {
+            "type": "message",
+            "attachments": [{
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": {
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "type": "AdaptiveCard",
+                    "version": "1.4",
+                    "body": [
+                        {"type": "TextBlock", "text": "CP RIFIUTATA #" + request_id, "weight": "Bolder", "size": "Medium", "color": "Attention"},
+                        {"type": "FactSet", "facts": [
+                            {"title": "Evento", "value": evento or "N/D"},
+                            {"title": "Mercato", "value": mercato or "N/D"}
+                        ]},
+                        {"type": "TextBlock", "text": "Il tipster ha RIFIUTATO la controproposta. Nessuna azione richiesta.", "wrap": True, "isSubtle": True}
+                    ]
+                }
+            }]
+        }
 
     try:
         async with aiohttp.ClientSession() as s:
-            await s.post(POWER_AUTOMATE_URL, json=payload,
+            await s.post(POWER_AUTOMATE_URL, json=card_payload,
                         headers={"Content-Type": "application/json"},
                         timeout=aiohttp.ClientTimeout(total=15))
     except Exception as e:
